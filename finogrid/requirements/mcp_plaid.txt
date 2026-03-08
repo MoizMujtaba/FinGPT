@@ -1,0 +1,2 @@
+-r mcp_base.txt
+plaid-python==20.1.0

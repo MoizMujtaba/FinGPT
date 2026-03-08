@@ -1,0 +1,6 @@
+-r base.txt
+python-multipart==0.0.9
+httpx==0.27.0
+# Chain watcher — Base L2 / EVM event polling
+web3==6.15.1
+eth-account==0.11.2

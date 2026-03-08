@@ -1,0 +1,145 @@
+version: "3.9"
+
+# ── Local dev stack ───────────────────────────────────────────────────────────
+# Starts all Finogrid services + dependencies.
+# Copy .env.example → .env and fill in secrets before running.
+#
+#   make dev         # start everything
+#   make dev-down    # stop everything
+#   make logs        # follow all logs
+
+x-common-env: &common-env
+  DATABASE_URL: postgresql+asyncpg://finogrid:finogrid@postgres:5432/finogrid
+  DATABASE_SYNC_URL: postgresql://finogrid:finogrid@postgres:5432/finogrid
+  GCP_PROJECT_ID: ${GCP_PROJECT_ID:-local}
+  APP_DEBUG: "true"
+  APP_ENV: "local"
+
+services:
+
+  # ── Infrastructure ─────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: finogrid
+      POSTGRES_PASSWORD: finogrid
+      POSTGRES_DB: finogrid
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finogrid"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── API Services ────────────────────────────────────────────────────────────
+
+  ingress_api:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    environment:
+      <<: *common-env
+      PORT: "8000"
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app  # hot reload in dev
+
+  agent_ledger_api:
+    build:
+      context: .
+      dockerfile: services/agent_ledger_api/Dockerfile
+    environment:
+      <<: *common-env
+      PORT: "8100"
+      AGENT_LEDGER_JWT_SECRET: ${AGENT_LEDGER_JWT_SECRET:-dev-secret-change-in-prod}
+      CHAIN: "base-sepolia"
+      CHAIN_RPC_URL: ${CHAIN_RPC_URL:-https://sepolia.base.org}
+      KYA_VALIDATOR_URL: http://kya_validator:9005
+      WALLET_FACTORY_URL: http://wallet_factory:9004
+      KYA_ENABLED: "true"
+    ports:
+      - "8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kya_validator:
+        condition: service_started
+      wallet_factory:
+        condition: service_started
+
+  ops_console:
+    build:
+      context: .
+      dockerfile: services/ops_console/Dockerfile
+    environment:
+      <<: *common-env
+      PORT: "8200"
+      OPS_API_KEY: ${OPS_API_KEY:-dev-ops-key}
+    ports:
+      - "8200:8200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  routing_engine:
+    build:
+      context: .
+      dockerfile: services/routing_engine/Dockerfile
+    environment:
+      <<: *common-env
+      PUBSUB_PROJECT_ID: ${GCP_PROJECT_ID:-local}
+      PUBSUB_SUBSCRIPTION: batch-events-sub
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── MCP Servers ─────────────────────────────────────────────────────────────
+
+  kya_validator:
+    build:
+      context: .
+      dockerfile: mcp/kya_validator/Dockerfile
+    environment:
+      PORT: "9005"
+      SARDINE_API_KEY: ${SARDINE_API_KEY:-}
+      PERSONA_API_KEY: ${PERSONA_API_KEY:-}
+      APP_ENV: "local"
+    ports:
+      - "9005:9005"
+
+  wallet_factory:
+    build:
+      context: .
+      dockerfile: mcp/wallet_factory/Dockerfile
+    environment:
+      PORT: "9004"
+      CHAIN_RPC_URL: ${CHAIN_RPC_URL:-https://sepolia.base.org}
+      APP_ENV: "local"
+    ports:
+      - "9004:9004"
+
+  plaid_mcp:
+    build:
+      context: .
+      dockerfile: mcp/plaid/Dockerfile
+    environment:
+      PORT: "9006"
+      PLAID_CLIENT_ID: ${PLAID_CLIENT_ID:-}
+      PLAID_SECRET: ${PLAID_SECRET:-}
+      PLAID_ENV: "sandbox"
+      APP_ENV: "local"
+    ports:
+      - "9006:9006"
+
+volumes:
+  postgres_data:

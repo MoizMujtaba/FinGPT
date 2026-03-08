@@ -1,0 +1,270 @@
+# Finogrid — Google Cloud Build CI/CD
+#
+# Prerequisites (one-time setup in your GCP project):
+#   gcloud services enable \
+#     cloudbuild.googleapis.com run.googleapis.com \
+#     artifactregistry.googleapis.com secretmanager.googleapis.com \
+#     sqladmin.googleapis.com
+#
+#   gcloud artifacts repositories create finogrid \
+#     --repository-format=docker --location=us-central1
+#
+# Substitutions (set in Cloud Build trigger or CLI):
+#   _REGION          — GCP region (default: us-central1)
+#   _REGISTRY        — Artifact Registry host (default: us-central1-docker.pkg.dev)
+#   _DB_URL_SECRET   — Secret Manager secret name for DATABASE_URL
+#   _JWT_SECRET      — Secret Manager secret name for JWT_SECRET
+#   _OPS_KEY_SECRET  — Secret Manager secret name for OPS_API_KEY
+
+substitutions:
+  _REGION: us-central1
+  _REGISTRY: us-central1-docker.pkg.dev
+  _IMAGE_BASE: ${_REGISTRY}/${PROJECT_ID}/finogrid
+
+steps:
+
+  # ── Build all images in parallel ───────────────────────────────────────────
+
+  - id: build-ingress-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE_BASE}/ingress-api:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE_BASE}/ingress-api:latest
+      - -f
+      - services/ingress_api/Dockerfile
+      - .
+    waitFor: ["-"]
+
+  - id: build-agent-ledger-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE_BASE}/agent-ledger-api:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE_BASE}/agent-ledger-api:latest
+      - -f
+      - services/agent_ledger_api/Dockerfile
+      - .
+    waitFor: ["-"]
+
+  - id: build-ops-console
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE_BASE}/ops-console:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE_BASE}/ops-console:latest
+      - -f
+      - services/ops_console/Dockerfile
+      - .
+    waitFor: ["-"]
+
+  - id: build-routing-engine
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE_BASE}/routing-engine:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE_BASE}/routing-engine:latest
+      - -f
+      - services/routing_engine/Dockerfile
+      - .
+    waitFor: ["-"]
+
+  - id: build-kya-validator
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE_BASE}/kya-validator:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE_BASE}/kya-validator:latest
+      - -f
+      - mcp/kya_validator/Dockerfile
+      - .
+    waitFor: ["-"]
+
+  - id: build-wallet-factory
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE_BASE}/wallet-factory:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE_BASE}/wallet-factory:latest
+      - -f
+      - mcp/wallet_factory/Dockerfile
+      - .
+    waitFor: ["-"]
+
+  - id: build-plaid-mcp
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE_BASE}/plaid-mcp:${COMMIT_SHA}
+      - -t
+      - ${_IMAGE_BASE}/plaid-mcp:latest
+      - -f
+      - mcp/plaid/Dockerfile
+      - .
+    waitFor: ["-"]
+
+  # ── Push all images ────────────────────────────────────────────────────────
+
+  - id: push-all
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        for svc in ingress-api agent-ledger-api ops-console routing-engine kya-validator wallet-factory plaid-mcp; do
+          docker push ${_IMAGE_BASE}/$${svc}:${COMMIT_SHA}
+          docker push ${_IMAGE_BASE}/$${svc}:latest
+        done
+    waitFor:
+      - build-ingress-api
+      - build-agent-ledger-api
+      - build-ops-console
+      - build-routing-engine
+      - build-kya-validator
+      - build-wallet-factory
+      - build-plaid-mcp
+
+  # ── Run tests ──────────────────────────────────────────────────────────────
+
+  - id: run-tests
+    name: ${_IMAGE_BASE}/agent-ledger-api:${COMMIT_SHA}
+    entrypoint: python
+    args: ["-m", "pytest", "tests/unit/", "-v", "--tb=short"]
+    env:
+      - DATABASE_URL=postgresql+asyncpg://test:test@localhost/test
+      - APP_ENV=test
+      - KYA_ENABLED=false
+    waitFor: [push-all]
+
+  # ── Deploy to Cloud Run ────────────────────────────────────────────────────
+
+  - id: deploy-ingress-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - finogrid-ingress-api
+      - --image=${_IMAGE_BASE}/ingress-api:${COMMIT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --min-instances=1
+      - --max-instances=10
+      - --memory=512Mi
+      - --cpu=1
+      - --set-secrets=DATABASE_URL=${_DB_URL_SECRET}:latest,JWT_SECRET=${_JWT_SECRET}:latest
+    waitFor: [run-tests]
+
+  - id: deploy-agent-ledger-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - finogrid-agent-ledger-api
+      - --image=${_IMAGE_BASE}/agent-ledger-api:${COMMIT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --min-instances=1
+      - --max-instances=20
+      - --memory=1Gi
+      - --cpu=2
+      - --set-secrets=DATABASE_URL=${_DB_URL_SECRET}:latest
+    waitFor: [run-tests]
+
+  - id: deploy-ops-console
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - finogrid-ops-console
+      - --image=${_IMAGE_BASE}/ops-console:${COMMIT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --ingress=internal
+      - --min-instances=1
+      - --max-instances=3
+      - --memory=512Mi
+      - --set-secrets=DATABASE_URL=${_DB_URL_SECRET}:latest,OPS_API_KEY=${_OPS_KEY_SECRET}:latest
+    waitFor: [run-tests]
+
+  - id: deploy-kya-validator
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - finogrid-kya-validator
+      - --image=${_IMAGE_BASE}/kya-validator:${COMMIT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --ingress=internal
+      - --min-instances=1
+      - --max-instances=5
+      - --memory=256Mi
+    waitFor: [run-tests]
+
+  - id: deploy-wallet-factory
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - finogrid-wallet-factory
+      - --image=${_IMAGE_BASE}/wallet-factory:${COMMIT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --ingress=internal
+      - --min-instances=1
+      - --max-instances=5
+      - --memory=256Mi
+    waitFor: [run-tests]
+
+  - id: deploy-plaid-mcp
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - finogrid-plaid-mcp
+      - --image=${_IMAGE_BASE}/plaid-mcp:${COMMIT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --ingress=internal
+      - --min-instances=1
+      - --max-instances=5
+      - --memory=256Mi
+    waitFor: [run-tests]
+
+images:
+  - ${_IMAGE_BASE}/ingress-api:${COMMIT_SHA}
+  - ${_IMAGE_BASE}/agent-ledger-api:${COMMIT_SHA}
+  - ${_IMAGE_BASE}/ops-console:${COMMIT_SHA}
+  - ${_IMAGE_BASE}/routing-engine:${COMMIT_SHA}
+  - ${_IMAGE_BASE}/kya-validator:${COMMIT_SHA}
+  - ${_IMAGE_BASE}/wallet-factory:${COMMIT_SHA}
+  - ${_IMAGE_BASE}/plaid-mcp:${COMMIT_SHA}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

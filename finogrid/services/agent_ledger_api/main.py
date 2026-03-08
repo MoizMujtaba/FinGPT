@@ -27,7 +27,7 @@ import structlog
 
 from .config import settings
 from .middleware.payment_required import PaymentRequiredMiddleware
-from .routers import agent_accounts, kya, wallets, payment_intents, micropay, topup, health
+from .routers import agent_accounts, kya, wallets, payment_intents, micropay, topup, health, a2a
 
 log = structlog.get_logger()
 
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Finogrid Agent Ledger API",
-    description="Stablecoin micro-transactions between AI agents — KYA, closed/open loop, x402",
+    description="Stablecoin micro-transactions between AI agents — KYA, closed/open loop, x402, A2A",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs" if settings.app_debug else None,
@@ -57,6 +57,8 @@ app.add_middleware(
 app.add_middleware(PaymentRequiredMiddleware)
 
 app.include_router(health.router, prefix="/health", tags=["health"])
+# A2A — must be registered before other routes so /.well-known/* is matched first
+app.include_router(a2a.router, tags=["a2a"])
 app.include_router(agent_accounts.router, prefix="/v1/agent-accounts", tags=["agent-accounts"])
 app.include_router(kya.router, prefix="/v1/agent-accounts", tags=["kya"])
 app.include_router(wallets.router, prefix="/v1/agent-accounts", tags=["wallets"])

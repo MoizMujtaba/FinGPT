@@ -16,7 +16,7 @@ Zero modifications to any v1 model.
 """
 import uuid
 from enum import Enum as PyEnum
-from sqlalchemy import String, Boolean, Numeric, Integer, Text, ForeignKey, Enum
+from sqlalchemy import String, Boolean, Numeric, Integer, Text, ForeignKey, Enum, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin, UUIDMixin
@@ -151,9 +151,9 @@ class AgentKYA(Base, UUIDMixin, TimestampMixin):
     validator_name: Mapped[str | None] = mapped_column(String(128))
     validator_ref: Mapped[str | None] = mapped_column(String(255))
     validator_token: Mapped[str | None] = mapped_column(Text)  # encrypted in prod
-    validator_expires_at: Mapped[str | None] = mapped_column(String(64))
-    validated_at: Mapped[str | None] = mapped_column(String(64))
-    last_reviewed_at: Mapped[str | None] = mapped_column(String(64))
+    validator_expires_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
+    validated_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_reviewed_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
 
     # Agent identity fields (captured at KYA submission)
     agent_purpose: Mapped[str | None] = mapped_column(Text)
@@ -161,7 +161,7 @@ class AgentKYA(Base, UUIDMixin, TimestampMixin):
     declared_use_case: Mapped[str | None] = mapped_column(String(64))
     # data_retrieval | content_generation | trading_support | general
 
-    submitted_at: Mapped[str | None] = mapped_column(String(64))
+    submitted_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
     agent_account: Mapped["AgentAccount"] = relationship(back_populates="kya")
@@ -197,9 +197,9 @@ class AgentWallet(Base, UUIDMixin, TimestampMixin):
     max_per_tx_usdc: Mapped[float] = mapped_column(Numeric(28, 8), default=0.10)
     max_daily_usdc: Mapped[float] = mapped_column(Numeric(28, 8), default=1.00)
     daily_spent_usdc: Mapped[float] = mapped_column(Numeric(28, 8), default=0.0)
-    daily_reset_at: Mapped[str | None] = mapped_column(String(64))
+    daily_reset_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
     allowed_counterparties: Mapped[list] = mapped_column(JSONB, default=list)
-    expires_at: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
     max_uses: Mapped[int | None] = mapped_column(Integer)
     use_count: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -247,7 +247,7 @@ class PaymentIntent(Base, UUIDMixin, TimestampMixin):
     status: Mapped[IntentStatus] = mapped_column(
         Enum(IntentStatus), default=IntentStatus.RESERVED, nullable=False
     )
-    expires_at: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[object] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 
     # Populated on consumption
     consumed_micro_tx_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -302,6 +302,9 @@ class MicroTransaction(Base, UUIDMixin, TimestampMixin):
     payment_intent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_intents.id")
     )
+    mandate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mandates.id")
+    )
     # x402 linkage
     x402_payment_header: Mapped[str | None] = mapped_column(Text)
     x402_resource_url: Mapped[str | None] = mapped_column(String(2048))
@@ -311,9 +314,9 @@ class MicroTransaction(Base, UUIDMixin, TimestampMixin):
     )
     on_chain_tx_hash: Mapped[str | None] = mapped_column(String(255))
     on_chain_block: Mapped[int | None] = mapped_column(Integer)
-    on_chain_confirmed_at: Mapped[str | None] = mapped_column(String(64))
+    on_chain_confirmed_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
     failure_reason: Mapped[str | None] = mapped_column(Text)
-    settled_at: Mapped[str | None] = mapped_column(String(64))
+    settled_at: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True))
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
     payer_wallet: Mapped["AgentWallet"] = relationship(

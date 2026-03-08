@@ -14,6 +14,8 @@ from .....database.models.agent_ledger import (
     AgentAccount, AgentWallet, AgentKYA, PaymentIntent, MicroTransaction,
     AgentLedgerEntry, IntentStatus, LoopType, MicroTxStatus,
 )
+from .....database.models.audit import AuditLog
+from .....database.models.mandate import Mandate, MandateStatus, MandateScope
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -38,6 +40,32 @@ async def micropay(
     9. Available balance check
     10. Settle off-chain, emit ledger entry
     """
+    # ── Gate 0: Mandate ──────────────────────────────────────────────────────
+    # Every outbound payment must be covered by an active, non-expired Mandate
+    # with scope PAYOUT or FULL granted to this AgentAccount.
+    mandate_result = await db.execute(
+        select(Mandate).where(
+            Mandate.agent_account_id == agent.id,
+            Mandate.status == MandateStatus.ACTIVE,
+            Mandate.scope.in_([MandateScope.PAYOUT, MandateScope.FULL]),
+        ).order_by(Mandate.activated_at.desc()).limit(1)
+    )
+    active_mandate = mandate_result.scalar_one_or_none()
+    if active_mandate is None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "No active PAYOUT mandate found for this agent. "
+                "An AgentOwner (Principal) must grant a Mandate before outbound payments are permitted."
+            ),
+        )
+    now_mandate = datetime.now(timezone.utc)
+    if active_mandate.expires_at and active_mandate.expires_at < now_mandate:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent mandate has expired. AgentOwner must renew the mandate.",
+        )
+
     # ── Gate 1: KYA ──────────────────────────────────────────────────────────
     if settings.kya_enabled:
         await assert_kya_status(agent, required_level="basic")
@@ -228,6 +256,7 @@ async def micropay(
         chain=agent.chain,
         loop_type=wallet.loop_type,
         payment_intent_id=intent.id if intent else None,
+        mandate_id=active_mandate.id,
         x402_payment_header=request.x402_payment_header,
         x402_resource_url=request.x402_resource_url,
         status=MicroTxStatus.SETTLED_OFFCHAIN,
@@ -268,6 +297,26 @@ async def micropay(
         ),
     )
     db.add(ledger_entry)
+
+    # Append-only compliance audit log
+    audit = AuditLog(
+        actor_type="agent",
+        actor_id=str(agent.id),
+        action="micropay_settled",
+        resource_type="micro_transaction",
+        resource_id=str(micro_tx.id),
+        after_state={
+            "idempotency_key": request.idempotency_key,
+            "payer_wallet_id": str(wallet.id),
+            "payee_address": request.payee_address,
+            "amount_usdc": str(request.amount_usdc),
+            "loop_type": str(wallet.loop_type),
+            "payment_intent_id": str(intent.id) if intent else None,
+            "mandate_id": str(active_mandate.id),
+            "balance_after": str(balance_after),
+        },
+    )
+    db.add(audit)
 
     await db.commit()
 

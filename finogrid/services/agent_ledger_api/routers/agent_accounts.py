@@ -11,6 +11,7 @@ from ..schemas import (
 )
 from ..dependencies import get_db, get_current_agent_account
 from .....database.models.agent_ledger import AgentAccount, AgentLedgerEntry
+from .....database.models.audit import AuditLog
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -39,6 +40,17 @@ async def register_agent_account(
     db.add(agent)
     await db.commit()
     await db.refresh(agent)
+
+    audit = AuditLog(
+        actor_type="client",
+        actor_id=str(request.owner_client_id) if request.owner_client_id else None,
+        action="agent_account_registered",
+        resource_type="agent_account",
+        resource_id=str(agent.id),
+        after_state={"name": agent.name, "chain": agent.chain, "kya_status": agent.kya_status},
+    )
+    db.add(audit)
+    await db.commit()
 
     log.info("agent_account_registered", agent_id=str(agent.id), name=agent.name)
     return AgentAccountCreateResponse(

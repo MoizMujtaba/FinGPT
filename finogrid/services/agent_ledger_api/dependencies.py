@@ -1,6 +1,6 @@
 """Dependency injection for Agent Ledger API."""
 import hashlib
-from fastapi import HTTPException, Security, status
+from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import select
@@ -23,7 +23,7 @@ async def get_db():
 
 async def get_current_agent_account(
     api_key: str = Security(agent_api_key_header),
-    db: AsyncSession = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """Resolve X-Agent-API-Key to an active AgentAccount."""
     from ....database.models.agent_ledger import AgentAccount, AgentStatus

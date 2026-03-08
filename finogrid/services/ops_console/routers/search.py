@@ -6,7 +6,8 @@ Ops staff can search by: tx hash, wallet address, agent name, batch ID, intent I
 import structlog
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, text
+from sqlalchemy import select, or_, cast
+from sqlalchemy import String as SAString
 
 from ..dependencies import get_db, require_ops_key
 from .....database.models.client import Client
@@ -42,7 +43,7 @@ async def unified_search(
             select(Client).where(
                 or_(
                     Client.name.ilike(f"%{q_lower}%"),
-                    text(f"CAST(clients.id AS TEXT) ILIKE '%{q_lower}%'"),
+                    cast(Client.id, SAString).ilike(f"%{q_lower}%"),
                 )
             ).limit(5)
         )).scalars().all()
@@ -56,7 +57,7 @@ async def unified_search(
             select(AgentAccount).where(
                 or_(
                     AgentAccount.name.ilike(f"%{q_lower}%"),
-                    text(f"CAST(agent_accounts.id AS TEXT) ILIKE '%{q_lower}%'"),
+                    cast(AgentAccount.id, SAString).ilike(f"%{q_lower}%"),
                 )
             ).limit(5)
         )).scalars().all()
@@ -92,7 +93,7 @@ async def unified_search(
                 or_(
                     MicroTransaction.idempotency_key.ilike(f"%{q_lower}%"),
                     MicroTransaction.on_chain_tx_hash.ilike(f"%{q_lower}%"),
-                    text(f"CAST(micro_transactions.id AS TEXT) ILIKE '%{q_lower}%'"),
+                    cast(MicroTransaction.id, SAString).ilike(f"%{q_lower}%"),
                 )
             ).limit(5)
         )).scalars().all()
@@ -110,7 +111,7 @@ async def unified_search(
     try:
         batches = (await db.execute(
             select(Batch).where(
-                text(f"CAST(batches.id AS TEXT) ILIKE '%{q_lower}%'")
+                cast(Batch.id, SAString).ilike(f"%{q_lower}%")
             ).limit(5)
         )).scalars().all()
         results += [{"type": "batch", "id": str(b.id), "label": str(b.id), "status": b.status} for b in batches]

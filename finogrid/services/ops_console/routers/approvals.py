@@ -48,9 +48,9 @@ async def list_pending_approvals(
             "items": [
                 {
                     "approval_id": str(a.id),
-                    "entity_type": a.entity_type,
-                    "entity_id": a.entity_id,
-                    "details": a.details,
+                    "resource_type": a.resource_type,
+                    "resource_id": a.resource_id,
+                    "detail": a.detail,
                     "created_at": a.created_at.isoformat() if a.created_at else None,
                 }
                 for a in pending
@@ -89,15 +89,16 @@ async def decide_approval(
 
     # Record decision
     decision_log = AuditLog(
-        entity_type=approval_log.entity_type,
-        entity_id=approval_log.entity_id,
+        actor_type="operator",
+        actor_id=request.ops_agent_id,
         action=f"approval_{request.decision}d",
-        actor=request.ops_agent_id,
-        details={
+        resource_type=approval_log.resource_type,
+        resource_id=approval_log.resource_id,
+        detail=f"{request.decision} by ops/{request.ops_agent_id}: {request.ops_note}",
+        after_state={
             "original_approval_id": approval_id,
             "decision": request.decision,
             "ops_note": request.ops_note,
-            "original_details": approval_log.details,
         },
     )
     db.add(decision_log)

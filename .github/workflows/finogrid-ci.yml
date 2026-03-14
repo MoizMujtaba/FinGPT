@@ -1,0 +1,153 @@
+name: Finogrid CI
+
+on:
+  push:
+    branches: ["master", "claude/**", "feature/**"]
+    paths:
+      - "finogrid/**"
+      - ".github/workflows/finogrid-ci.yml"
+  pull_request:
+    branches: ["master"]
+    paths:
+      - "finogrid/**"
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── Lint ────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linter
+        run: pip install ruff
+
+      - name: Run ruff
+        run: ruff check finogrid/ --select E,W,F,I --ignore E501
+
+  # ── Unit tests ──────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r finogrid/requirements.txt pytest pytest-asyncio pytest-cov
+
+      - name: Run unit tests
+        working-directory: finogrid
+        env:
+          DATABASE_URL: "postgresql+asyncpg://finogrid:password@localhost:5432/finogrid"
+          PUBSUB_PROJECT_ID: "test-project"
+          JWT_SECRET_KEY: "test-secret"
+          KYA_ENABLED: "false"
+          CHAIN_ENABLED: "false"
+        run: |
+          pytest tests/unit/ -v \
+            --cov=services --cov=corridors --cov=mcp \
+            --cov-report=xml --cov-report=term-missing \
+            -x
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: finogrid/coverage.xml
+          flags: unit
+
+  # ── Integration tests ───────────────────────────────────────────────────────
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: finogrid_test
+          POSTGRES_USER: finogrid
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r finogrid/requirements.txt pytest pytest-asyncio httpx
+
+      - name: Apply database migrations
+        working-directory: finogrid
+        env:
+          PGPASSWORD: password
+        run: |
+          for f in database/migrations/*.sql; do
+            psql -h localhost -U finogrid -d finogrid_test -f "$f"
+          done
+
+      - name: Run integration tests
+        working-directory: finogrid
+        env:
+          DATABASE_URL: "postgresql+asyncpg://finogrid:password@localhost:5432/finogrid_test"
+          PUBSUB_PROJECT_ID: "test-project"
+          PUBSUB_EMULATOR_HOST: "localhost:8085"
+          JWT_SECRET_KEY: "test-secret"
+          KYA_ENABLED: "false"
+          CHAIN_ENABLED: "false"
+          V1_INGRESS_API_URL: "http://localhost:8000"
+          V1_INTERNAL_API_KEY: "test-key"
+          BRIDGE_WEBHOOK_SECRET: ""
+          KYT_WEBHOOK_SECRET: ""
+        run: |
+          pytest tests/integration/ -v -x --timeout=60
+
+  # ── Docker build (smoke test) ───────────────────────────────────────────────
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    strategy:
+      matrix:
+        service:
+          - name: ingress-api
+            dockerfile: services/ingress_api/Dockerfile
+          - name: agent-ledger
+            dockerfile: services/agent_ledger_api/Dockerfile
+          - name: ops-console
+            dockerfile: services/ops_console/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.service.name }}
+        working-directory: finogrid
+        run: |
+          docker build \
+            -f ${{ matrix.service.dockerfile }} \
+            -t finogrid/${{ matrix.service.name }}:ci-${{ github.sha }} \
+            .

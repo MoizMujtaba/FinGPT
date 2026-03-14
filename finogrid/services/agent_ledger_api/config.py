@@ -36,7 +36,7 @@ class AgentLedgerSettings(BaseSettings):
     wallet_factory_mcp_url: str = "http://localhost:9004"
 
     # v1 Ingress API (for withdrawal routing)
-    v1_ingress_url: str = "http://localhost:8000"
+    v1_ingress_api_url: str = "http://localhost:8000"
     v1_internal_api_key: str = "internal-service-key"
 
     # x402 settings

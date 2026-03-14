@@ -22,6 +22,11 @@ class PhilippinesAdapter(CorridorAdapter):
                     missing.append(f)
         return BeneficiaryValidationResult(valid=not missing, missing_fields=missing)
 
+    def get_chain_for_asset(self, asset: str) -> str:
+        # Philippines: largest remittance market in SE Asia; Tron preferred for USDT
+        # (low fees, wide exchange support). Base L2 for USDC.
+        return "tron" if asset.upper() == "USDT" else "base"
+
     def format_bank_payload(self, beneficiary_data: dict) -> dict:
         rail = "instapay" if beneficiary_data.get("instapay") else "pesonet"
         return {

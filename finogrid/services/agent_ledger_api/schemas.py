@@ -194,3 +194,38 @@ class TopUpResponse(BaseModel):
     deposit_tx_hash: str
     status: str  # pending_confirmation | credited
     message: str
+
+
+# ── Withdraw ──────────────────────────────────────────────────────────────────
+
+class WithdrawRequest(BaseModel):
+    amount_usdc: Decimal = Field(..., gt=0)
+    corridor_code: str = Field(
+        ..., min_length=2, max_length=2,
+        description="ISO-2 corridor code (BR, NG, IN, AR, VN, AE, ID, PH)",
+    )
+    beneficiary_data: dict = Field(
+        ...,
+        description="Corridor-specific beneficiary fields (same schema as v1 payout)",
+    )
+    delivery_mode: Literal["wallet", "fiat"] = "fiat"
+    reference: Optional[str] = Field(
+        None, max_length=255,
+        description="Caller reference; stored on the payout batch for reconciliation",
+    )
+    idempotency_key: str = Field(..., min_length=8, max_length=255)
+
+
+class WithdrawResponse(BaseModel):
+    withdrawal_id: uuid.UUID
+    agent_account_id: uuid.UUID
+    amount_usdc: Decimal
+    corridor_code: str
+    delivery_mode: str
+    status: str = "submitted"
+    v1_batch_id: Optional[uuid.UUID] = None
+    available_balance_after: Decimal
+    message: str = (
+        "Withdrawal submitted to v1 payout rails. "
+        "Track status via GET /v1/ops/ledger or your webhook."
+    )

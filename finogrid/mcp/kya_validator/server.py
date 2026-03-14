@@ -177,10 +177,57 @@ async def get_kya_status(request: GetKYAStatusRequest):
     if not record:
         raise HTTPException(status_code=404, detail="validator_ref not found")
 
-    # For external backends, poll the vendor here and update record
+    # For external backends, poll the vendor and update record
     if settings.kya_validator_backend == "sardine" and record.get("status") == "pending":
-        # TODO: poll Sardine for decision
-        pass
+        sardine_session_id = record.get("sardine_session_id")
+        if sardine_session_id and settings.sardine_api_key:
+            import httpx
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(
+                        f"{settings.sardine_api_url}/kyc/sessions/{sardine_session_id}",
+                        headers={"Authorization": f"Bearer {settings.sardine_api_key}"},
+                    )
+                if resp.status_code == 200:
+                    sardine_data = resp.json()
+                    sardine_status = (sardine_data.get("status") or "").lower()
+
+                    if sardine_status in ("approved", "pass"):
+                        # Determine level from Sardine risk score (lower = higher trust)
+                        risk_score = sardine_data.get("riskScore", 100)
+                        kya_level = "enhanced" if risk_score < 30 else "basic"
+                        token, expires_at = _mint_validator_token(
+                            record["agent_account_id"], kya_level
+                        )
+                        record.update({
+                            "status": "approved",
+                            "kya_level": kya_level,
+                            "validator_token": token,
+                            "validator_expires_at": expires_at.isoformat(),
+                            "validated_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                        log.info(
+                            "sardine_kya_approved",
+                            agent_id=record["agent_account_id"],
+                            level=kya_level,
+                            risk_score=risk_score,
+                        )
+                    elif sardine_status in ("rejected", "fail", "denied"):
+                        record["status"] = "rejected"
+                        log.info(
+                            "sardine_kya_rejected",
+                            agent_id=record["agent_account_id"],
+                            sardine_status=sardine_status,
+                        )
+                    # else: still pending — leave as-is
+                else:
+                    log.warning(
+                        "sardine_poll_error",
+                        session_id=sardine_session_id,
+                        status_code=resp.status_code,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("sardine_poll_failed", session_id=sardine_session_id, error=str(exc))
 
     return {
         "validator_ref": request.validator_ref,

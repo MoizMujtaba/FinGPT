@@ -23,6 +23,12 @@ class UAEAdapter(CorridorAdapter):
                     missing.append(f)
         return BeneficiaryValidationResult(valid=not missing, missing_fields=missing)
 
+    def get_chain_for_asset(self, asset: str) -> str:
+        # UAE: regional financial hub with VARA regulation. Ethereum preferred for
+        # institutional-scale USDT transfers. Base L2 for USDC (cost-efficient for
+        # high-volume SME payouts under $100k).
+        return "ethereum" if asset.upper() == "USDT" else "base"
+
     def format_bank_payload(self, beneficiary_data: dict) -> dict:
         return {
             "type": "swift_iban",

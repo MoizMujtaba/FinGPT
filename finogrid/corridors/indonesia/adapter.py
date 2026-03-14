@@ -22,6 +22,10 @@ class IndonesiaAdapter(CorridorAdapter):
                     missing.append(f)
         return BeneficiaryValidationResult(valid=not missing, missing_fields=missing)
 
+    def get_chain_for_asset(self, asset: str) -> str:
+        # Indonesia: Tron dominant for USDT across SE Asia. Base L2 for USDC.
+        return "tron" if asset.upper() == "USDT" else "base"
+
     def format_bank_payload(self, beneficiary_data: dict) -> dict:
         return {
             "type": "bi_fast",

@@ -44,6 +44,11 @@ class ArgentinaAdapter(CorridorAdapter):
                 missing.append("cuit")
         return BeneficiaryValidationResult(valid=not missing, missing_fields=missing)
 
+    def get_chain_for_asset(self, asset: str) -> str:
+        # Argentina: USDT widely held on Tron (lowest fees for informal savings).
+        # USDC goes over Base L2 (native USDC, ~$0.007/tx).
+        return "tron" if asset.upper() == "USDT" else "base"
+
     def format_bank_payload(self, beneficiary_data: dict) -> dict:
         return {
             "type": "bank_transfer_ar",

@@ -43,6 +43,10 @@ class IndiaAdapter(CorridorAdapter):
                 missing.append("upi_id")
         return BeneficiaryValidationResult(valid=not missing, missing_fields=missing)
 
+    def get_chain_for_asset(self, asset: str) -> str:
+        # India: Base L2 for USDC (cheapest, RBI-neutral). Tron for USDT (widely supported).
+        return "tron" if asset.upper() == "USDT" else "base"
+
     def format_bank_payload(self, beneficiary_data: dict) -> dict:
         return {
             "type": "upi",

@@ -27,7 +27,7 @@ import structlog
 
 from .config import settings
 from .middleware.payment_required import PaymentRequiredMiddleware
-from .routers import agent_accounts, kya, wallets, payment_intents, micropay, topup, health
+from .routers import agent_accounts, kya, wallets, payment_intents, micropay, topup, withdraw, health
 
 log = structlog.get_logger()
 
@@ -63,3 +63,4 @@ app.include_router(wallets.router, prefix="/v1/agent-accounts", tags=["wallets"]
 app.include_router(payment_intents.router, prefix="/v1/payment-intents", tags=["payment-intents"])
 app.include_router(micropay.router, prefix="/v1/micropay", tags=["micropay"])
 app.include_router(topup.router, prefix="/v1/agent-accounts", tags=["topup"])
+app.include_router(withdraw.router, prefix="/v1/agent-accounts", tags=["withdraw"])

@@ -51,6 +51,10 @@ class BrazilAdapter(CorridorAdapter):
             errors=errors,
         )
 
+    def get_chain_for_asset(self, asset: str) -> str:
+        # Brazil: USDC on Base L2 (native, cheapest). USDT on Tron (dominant chain for USDT).
+        return "tron" if asset.upper() == "USDT" else "base"
+
     def format_bank_payload(self, beneficiary_data: dict) -> dict:
         return {
             "type": "pix",

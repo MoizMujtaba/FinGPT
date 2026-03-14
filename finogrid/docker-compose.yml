@@ -1,0 +1,229 @@
+version: "3.9"
+
+# ── Finogrid local dev stack ──────────────────────────────────────────────────
+#
+# Services:
+#   postgres        — shared AlloyDB-compatible database
+#   pubsub-emu      — GCP Pub/Sub emulator (routing / compliance / recon events)
+#   ingress-api     — Port 8000: B2B batch payout intake
+#   agent-ledger    — Port 8100: A2A stablecoin micropay
+#   ops-console     — Port 8200: internal operations console
+#   mcp-bridge      — Port 9001: Bridge partner MCP
+#   mcp-kyt         — Port 9002: KYT/AML MCP
+#   mcp-identity    — Port 9003: KYB identity MCP
+#   mcp-wallet      — Port 9004: Wallet factory MCP
+#   mcp-kya         — Port 9005: KYA validator MCP
+#   mcp-plaid       — Port 9006: Plaid collections MCP
+#
+# Usage:
+#   cp .env.example .env   # fill in real secrets
+#   docker compose up -d postgres pubsub-emu
+#   docker compose up -d   # start all services
+#   docker compose logs -f ingress-api
+
+x-common-env: &common-env
+  DATABASE_URL: postgresql+asyncpg://finogrid:password@postgres:5432/finogrid
+  PUBSUB_PROJECT_ID: local-project
+  PUBSUB_EMULATOR_HOST: pubsub-emu:8085
+  APP_ENV: development
+  APP_DEBUG: "true"
+  LOG_LEVEL: INFO
+
+x-api-build: &api-build
+  context: .
+  dockerfile: services/ingress_api/Dockerfile   # overridden per service below
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: finogrid
+      POSTGRES_USER: finogrid
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finogrid"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pubsub-emu:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=local-project
+    ports:
+      - "8085:8085"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/v1/projects/local-project/topics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── API Services ─────────────────────────────────────────────────────────
+
+  ingress-api:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *common-env
+      PORT: "8000"
+      BRIDGE_API_KEY: ${BRIDGE_API_KEY:-sandbox_bridge_key}
+      BRIDGE_API_URL: ${BRIDGE_API_URL:-https://api.bridge.xyz/v0}
+      KYT_API_KEY: ${KYT_API_KEY:-sandbox_kyt_key}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-change-in-prod}
+      BRIDGE_WEBHOOK_SECRET: ${BRIDGE_WEBHOOK_SECRET:-}
+      KYT_WEBHOOK_SECRET: ${KYT_WEBHOOK_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pubsub-emu:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  agent-ledger:
+    build:
+      context: .
+      dockerfile: services/agent_ledger_api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+    environment:
+      <<: *common-env
+      PORT: "8100"
+      KYA_VALIDATOR_MCP_URL: http://mcp-kya:9005
+      WALLET_FACTORY_MCP_URL: http://mcp-wallet:9004
+      V1_INGRESS_API_URL: http://ingress-api:8000
+      V1_INTERNAL_API_KEY: ${V1_INTERNAL_API_KEY:-internal-service-key}
+      CHAIN_ENABLED: "false"
+      KYA_ENABLED: "true"
+      BASE_RPC_URL: ${BASE_RPC_URL:-https://mainnet.base.org}
+      USDC_CONTRACT_ADDRESS_BASE: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-kya:
+        condition: service_started
+      mcp-wallet:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ops-console:
+    build:
+      context: .
+      dockerfile: services/ops_console/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    environment:
+      <<: *common-env
+      PORT: "8200"
+      OPS_API_KEY: ${OPS_API_KEY:-local-ops-key}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── MCP Servers ───────────────────────────────────────────────────────────
+
+  mcp-bridge:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    command: python -m mcp.bridge.server
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    environment:
+      <<: *common-env
+      BRIDGE_API_KEY: ${BRIDGE_API_KEY:-sandbox_bridge_key}
+      BRIDGE_API_URL: ${BRIDGE_API_URL:-https://api.bridge.xyz/v0}
+
+  mcp-kyt:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    command: python -m mcp.kyt_aml.server
+    restart: unless-stopped
+    ports:
+      - "9002:9002"
+    environment:
+      <<: *common-env
+      KYT_API_KEY: ${KYT_API_KEY:-sandbox_kyt_key}
+
+  mcp-identity:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    command: python -m mcp.identity.server
+    restart: unless-stopped
+    ports:
+      - "9003:9003"
+    environment:
+      <<: *common-env
+      KYB_API_KEY: ${KYB_API_KEY:-sandbox_kyb_key}
+
+  mcp-wallet:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    command: python -m mcp.wallet_factory.server
+    restart: unless-stopped
+    ports:
+      - "9004:9004"
+    environment:
+      <<: *common-env
+      BASE_RPC_URL: ${BASE_RPC_URL:-https://mainnet.base.org}
+
+  mcp-kya:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    command: python -m mcp.kya_validator.server
+    restart: unless-stopped
+    ports:
+      - "9005:9005"
+    environment:
+      <<: *common-env
+      KYA_VALIDATOR_BACKEND: ${KYA_VALIDATOR_BACKEND:-internal}
+      SARDINE_API_KEY: ${SARDINE_API_KEY:-}
+      PERSONA_API_KEY: ${PERSONA_API_KEY:-}
+
+  mcp-plaid:
+    build:
+      context: .
+      dockerfile: services/ingress_api/Dockerfile
+    command: python -m mcp.plaid.server
+    restart: unless-stopped
+    ports:
+      - "9006:9006"
+    environment:
+      <<: *common-env
+      PLAID_CLIENT_ID: ${PLAID_CLIENT_ID:-}
+      PLAID_SECRET: ${PLAID_SECRET:-}
+      PLAID_ENV: ${PLAID_ENV:-sandbox}
+
+volumes:
+  postgres-data:

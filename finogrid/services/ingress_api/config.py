@@ -19,5 +19,8 @@ class IngressSettings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
 
+    bridge_webhook_secret: str = ""
+    kyt_webhook_secret: str = ""
+
 
 settings = IngressSettings()

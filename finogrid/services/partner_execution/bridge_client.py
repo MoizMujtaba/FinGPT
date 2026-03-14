@@ -69,12 +69,18 @@ class BridgeClient:
         2. Convert to the specified stablecoin
         3. Route to wallet or partner off-ramp for fiat delivery
         """
+        from ...corridors import get_adapter
+        try:
+            network = get_adapter(corridor_code).get_chain_for_asset(asset)
+        except ValueError:
+            network = "ethereum"  # safe fallback for unknown corridors
+
         payload = {
             "amount": str(amount_usd),
             "currency": "usd",
             "destination": {
                 "asset": asset.lower(),
-                "network": "ethereum",  # TODO: per-corridor chain selection
+                "network": network,
             },
             "metadata": {
                 "finogrid_task_id": task_id,
